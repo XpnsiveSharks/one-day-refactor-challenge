@@ -18,6 +18,7 @@ constexpr size_t kApiUrlMaxLen = 129;
 
 String g_api_url;
 String g_mac;
+static bool g_authorized_unlock = false;
 
 void handle_reprovision() {
   Serial.println("Reprovisioning...");
@@ -27,12 +28,14 @@ void handle_reprovision() {
 }
 
 void handle_remote_unlock() {
+  g_authorized_unlock = true;
   solenoid_unlock();
 }
 
 void handle_pin_result(bool accepted) {
   if (accepted) {
     Serial.println("Access granted");
+    g_authorized_unlock = true;
     solenoid_unlock();
   } else {
     Serial.println("Access denied");
@@ -134,6 +137,14 @@ void loop() {
   static bool last_sensor_locked = sensor_locked;
   if (sensor_locked != last_sensor_locked) {
     last_sensor_locked = sensor_locked;
+    if (!sensor_locked) {
+      if (!g_authorized_unlock) {
+        Serial.println("TAMPER DETECTED");
+        api_client_send_tamper_alert(g_mac.c_str());
+      }
+    } else {
+      g_authorized_unlock = false;
+    }
     Serial.println(sensor_locked ? "Lock: LOCKED" : "Lock: OPEN");
     ws_client_send_state(sensor_locked ? "LOCKED" : "UNLOCKED");
   }

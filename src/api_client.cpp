@@ -63,3 +63,30 @@ bool api_client_register_device(const char* hardware_uuid, const char* token) {
 
   return false;
 }
+
+bool api_client_send_tamper_alert(const char* hardware_uuid) {
+  if (g_base_url[0] == '\0') {
+    Serial.println("API client not initialized");
+    return false;
+  }
+  if (!hardware_uuid) {
+    Serial.println("Missing hardware UUID");
+    return false;
+  }
+
+  char url[kUrlSize];
+  snprintf(url, sizeof(url), "%s/api/v1/devices/tamper", g_base_url);
+
+  char body[kBodySize];
+  snprintf(body, sizeof(body), "{\"hardware_uuid\":\"%s\"}", hardware_uuid);
+
+  HTTPClient http;
+  http.begin(url);
+  http.addHeader("Content-Type", "application/json");
+  int status = http.POST(reinterpret_cast<uint8_t*>(body), strlen(body));
+  Serial.print("Tamper alert status: ");
+  Serial.println(status);
+  http.end();
+
+  return status == 200;
+}
