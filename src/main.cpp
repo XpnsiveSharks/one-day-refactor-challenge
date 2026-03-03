@@ -8,6 +8,7 @@
 #include "provisioning.h"
 #include "wifi_manager.h"
 #include "ws_client.h"
+#include "solenoid.h"
 
 namespace {
 constexpr size_t kSsidMaxLen = 33;
@@ -25,9 +26,14 @@ void handle_reprovision() {
   ESP.restart();
 }
 
+void handle_remote_unlock() {
+  solenoid_unlock();
+}
+
 void handle_pin_result(bool accepted) {
   if (accepted) {
     Serial.println("Access granted");
+    solenoid_unlock();
   } else {
     Serial.println("Access denied");
   }
@@ -40,6 +46,7 @@ void start_normal_mode(const char* api_url, const char* mac) {
   pin_entry_init(handle_pin_result);
   ws_client_init(g_api_url.c_str(), g_mac.c_str());
   ws_client_set_reprovision_callback(handle_reprovision);
+  ws_client_set_unlock_callback(handle_remote_unlock);
   ws_client_start();
 }
 
@@ -79,6 +86,7 @@ void handle_provisioning_done(const ProvisioningData &data) {
 void setup() {
   Serial.begin(115200);
   keypad_init();
+  solenoid_init();
   nvs_storage_init();
 
   if (nvs_storage_is_provisioned()) {
@@ -119,6 +127,16 @@ void loop() {
   }
 
   ws_client_loop();
+  solenoid_loop();
+
+  bool sensor_locked = solenoid_sensor_locked();
+
+  static bool last_sensor_locked = sensor_locked;
+  if (sensor_locked != last_sensor_locked) {
+    last_sensor_locked = sensor_locked;
+    Serial.println(sensor_locked ? "Lock: LOCKED" : "Lock: OPEN");
+    ws_client_send_state(sensor_locked ? "LOCKED" : "UNLOCKED");
+  }
 
   char key = keypad_get_key();
   if (key) {

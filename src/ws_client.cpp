@@ -13,6 +13,7 @@ bool g_started = false;
 bool g_connected = false;
 unsigned long g_last_reconnect_attempt = 0;
 void (*g_reprovision_callback)() = nullptr;
+void (*g_unlock_callback)() = nullptr;
 
 String build_ws_url(const char* base_url, const char* hardware_uuid) {
   String ws_url = base_url;
@@ -73,6 +74,9 @@ bool parse_ws_url(const String& url, bool* use_ssl, String* host, uint16_t* port
 void handle_text_message(const String& message) {
   if (message.indexOf("remote_unlock") >= 0) {
     Serial.println("CMD: remote_unlock");
+    if (g_unlock_callback) {
+      g_unlock_callback();
+    }
   }
 
   if (message.indexOf("buzzer_off") >= 0) {
@@ -92,6 +96,7 @@ void handle_ws_event(WStype_t type, uint8_t* payload, size_t length) {
     case WStype_CONNECTED:
       g_connected = true;
       Serial.println("WS connected");
+      ws_client_send_heartbeat();
       break;
     case WStype_DISCONNECTED:
       g_connected = false;
@@ -154,8 +159,14 @@ void ws_client_loop() {
 
   webSocket.loop();
 
+  unsigned long now = millis();
+  static unsigned long last_heartbeat = 0;
+  if (g_connected && now - last_heartbeat >= 30000) {
+    last_heartbeat = now;
+    ws_client_send_heartbeat();
+  }
+
   if (!g_connected) {
-    unsigned long now = millis();
     if (now - g_last_reconnect_attempt >= 5000) {
       g_last_reconnect_attempt = now;
       start_connection();
@@ -169,4 +180,27 @@ bool ws_client_is_connected() {
 
 void ws_client_set_reprovision_callback(void (*cb)()) {
   g_reprovision_callback = cb;
+}
+
+void ws_client_set_unlock_callback(void (*cb)()) {
+  g_unlock_callback = cb;
+}
+
+void ws_client_send_state(const char* status) {
+  if (!g_connected) {
+    return;
+  }
+
+  String message = "{\"type\":\"state_update\",\"status\":\"";
+  message += status;
+  message += "\"}";
+  webSocket.sendTXT(message);
+}
+
+void ws_client_send_heartbeat() {
+  if (!g_connected) {
+    return;
+  }
+
+  webSocket.sendTXT("{\"type\":\"heartbeat\"}");
 }

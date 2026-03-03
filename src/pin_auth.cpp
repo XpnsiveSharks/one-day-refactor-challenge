@@ -53,16 +53,13 @@ void pin_auth_verify(const char* pin, pin_auth_result_cb_t callback) {
       callback(true);
       return;
     }
-    if (status == 401 || status == 403) {
+    if (status == 401 || status == 403 || status == 409) {
       http.end();
       callback(false);
       return;
     }
 
     http.end();
-    if (attempt < 2) {
-      delay(1000);
-    }
   }
 
   callback(false);
