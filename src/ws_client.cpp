@@ -126,8 +126,7 @@ void start_connection() {
   Serial.println(g_ws_url);
 
   if (g_use_ssl) {
-    webSocket.beginSSL(g_host.c_str(), g_port, g_path.c_str());
-    webSocket.setInsecure();
+    webSocket.beginSSL(g_host.c_str(), g_port, g_path.c_str(), "");
   } else {
     webSocket.begin(g_host.c_str(), g_port, g_path.c_str());
   }

@@ -51,6 +51,7 @@ void start_normal_mode(const char* api_url, const char* mac) {
   g_mac = mac;
   pin_auth_init(g_api_url.c_str(), g_mac.c_str());
   pin_entry_init(handle_pin_result);
+  pin_entry_set_reprovision_callback(handle_reprovision);
   ws_client_init(g_api_url.c_str(), g_mac.c_str());
   ws_client_set_reprovision_callback(handle_reprovision);
   ws_client_set_unlock_callback(handle_remote_unlock);
@@ -96,6 +97,8 @@ void setup() {
   keypad_init();
   solenoid_init();
   nvs_storage_init();
+  pin_entry_init(handle_pin_result);
+  pin_entry_set_reprovision_callback(handle_reprovision);
 
   if (nvs_storage_is_provisioned()) {
     char ssid[kSsidMaxLen] = {0};

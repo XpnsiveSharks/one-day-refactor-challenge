@@ -1,5 +1,6 @@
 #include <Arduino.h>
 #include <HTTPClient.h>
+#include <WiFiClient.h>
 #include <WiFiClientSecure.h>
 #include "api_client.h"
 
@@ -11,6 +12,10 @@ constexpr int kMaxRetries = 3;
 constexpr int kRetryDelayMs = 2000;
 
 char g_base_url[kBaseUrlSize] = {0};
+
+bool is_https() {
+  return strncmp(g_base_url, "https://", 8) == 0;
+}
 }  // namespace
 
 void api_client_init(const char* base_url) {
@@ -41,10 +46,16 @@ bool api_client_register_device(const char* hardware_uuid, const char* token) {
            hardware_uuid, token);
 
   for (int attempt = 1; attempt <= kMaxRetries; ++attempt) {
-    WiFiClientSecure client;
-    client.setInsecure();
+    WiFiClientSecure secure_client;
+    WiFiClient plain_client;
     HTTPClient http;
-    http.begin(client, url);
+
+    if (is_https()) {
+      secure_client.setInsecure();
+      http.begin(secure_client, url);
+    } else {
+      http.begin(plain_client, url);
+    }
     http.addHeader("Content-Type", "application/json");
     int status = http.POST(reinterpret_cast<uint8_t*>(body), strlen(body));
     Serial.print("Register attempt ");
@@ -83,10 +94,16 @@ bool api_client_send_tamper_alert(const char* hardware_uuid) {
   char body[kBodySize];
   snprintf(body, sizeof(body), "{\"hardware_uuid\":\"%s\"}", hardware_uuid);
 
-  WiFiClientSecure client;
-  client.setInsecure();
+  WiFiClientSecure secure_client;
+  WiFiClient plain_client;
   HTTPClient http;
-  http.begin(client, url);
+
+  if (is_https()) {
+    secure_client.setInsecure();
+    http.begin(secure_client, url);
+  } else {
+    http.begin(plain_client, url);
+  }
   http.addHeader("Content-Type", "application/json");
   int status = http.POST(reinterpret_cast<uint8_t*>(body), strlen(body));
   Serial.print("Tamper alert status: ");
