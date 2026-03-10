@@ -72,7 +72,7 @@ bool parse_ws_url(const String& url, bool* use_ssl, String* host, uint16_t* port
 }
 
 void handle_text_message(const String& message) {
-  if (message.indexOf("remote_unlock") >= 0) {
+  if (message.indexOf("remote_unlock") >= 0 || message.indexOf("\"UNLOCK\"") >= 0) {
     Serial.println("CMD: remote_unlock");
     if (g_unlock_callback) {
       g_unlock_callback();
