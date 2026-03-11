@@ -62,7 +62,7 @@ const char kProvisioningPage[] PROGMEM =
     "<label for='token'>Provisioning Token</label>"
     "<input id='token' name='token' type='text' placeholder='Paste token from app' required>"
     "<label for='api_url'>API URL</label>"
-    "<input id='api_url' name='api_url' type='text' placeholder='https://...' required>"
+    "<input id='api_url' name='api_url' type='text' placeholder='https://web-production-1770.up.railway.app (optional)'>"
     "<button type='submit'>Connect Device</button>"
     "</form>"
     "</div>"
@@ -100,6 +100,11 @@ void handle_provision() {
   copy_field(web_server.arg("token"), data.token, sizeof(data.token));
   copy_field(web_server.arg("api_url"), data.api_url, sizeof(data.api_url));
 
+  if (data.api_url[0] == '\0') {
+    strncpy(data.api_url, "https://web-production-1770.up.railway.app", sizeof(data.api_url) - 1);
+    data.api_url[sizeof(data.api_url) - 1] = '\0';
+  }
+
   web_server.send(200, "text/html",
                   "<!DOCTYPE html>"
                   "<html lang='en'>"
@@ -136,8 +141,28 @@ void handle_provision() {
   stop_pending = true;
 }
 
+// iOS/macOS: return fake success so OS detects captive portal and opens mini-browser
+void handle_apple_captive() {
+  web_server.send(200, "text/html",
+    "<HTML><HEAD><TITLE>Success</TITLE></HEAD><BODY>Success</BODY></HTML>");
+}
+
+// Android/Linux: return 204 triggers captive portal detection
+void handle_android_captive() {
+  web_server.send(204, "text/plain", "");
+}
+
+// Windows: return expected bodies so NCSI detects captive portal
+void handle_windows_connecttest() {
+  web_server.send(200, "text/plain", "Microsoft Connect Test");
+}
+
+void handle_windows_ncsi() {
+  web_server.send(200, "text/plain", "Microsoft NCSI");
+}
+
 void handle_not_found() {
-  web_server.sendHeader("Location", "/", true);
+  web_server.sendHeader("Location", "http://192.168.4.1/", true);
   web_server.send(302, "text/plain", "");
 }
 }  // namespace
@@ -156,9 +181,21 @@ void provisioning_start(provisioning_done_cb_t callback) {
   WiFi.softAP(ssid.c_str());
 
   dns_server.start(53, "*", kApIp);
+  dns_server.setTTL(0);
 
   web_server.on("/", HTTP_GET, handle_root);
   web_server.on("/provision", HTTP_POST, handle_provision);
+  // iOS / macOS captive portal detection
+  web_server.on("/hotspot-detect.html", HTTP_GET, handle_apple_captive);
+  web_server.on("/library/test/success.html", HTTP_GET, handle_apple_captive);
+  web_server.on("/canonical.html", HTTP_GET, handle_apple_captive);
+  // Android / Linux captive portal detection
+  web_server.on("/generate_204", HTTP_GET, handle_android_captive);
+  web_server.on("/gen_204", HTTP_GET, handle_android_captive);
+  // Windows captive portal detection
+  web_server.on("/connecttest.txt", HTTP_GET, handle_windows_connecttest);
+  web_server.on("/ncsi.txt", HTTP_GET, handle_windows_ncsi);
+  web_server.on("/redirect", HTTP_GET, handle_not_found);
   web_server.onNotFound(handle_not_found);
   web_server.begin();
 
