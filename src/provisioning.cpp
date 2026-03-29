@@ -5,7 +5,7 @@
 
 #include "provisioning.h"
 
-const char* kApiUrl = "https://web-production-1770.up.railway.app";
+const char* kApiUrl = "https://web-production-0146f.up.railway.app";
 
 namespace {
 const IPAddress kApIp(192, 168, 4, 1);
@@ -16,6 +16,8 @@ WebServer web_server(80);
 provisioning_done_cb_t done_callback = nullptr;
 bool provisioning_active = false;
 bool stop_pending = false;
+bool callback_pending = false;
+ProvisioningData callback_data = {};
 
 const char kProvisioningPage[] PROGMEM =
     "<!DOCTYPE html>"
@@ -161,10 +163,8 @@ void handle_provision() {
                   "</body>"
                   "</html>");
 
-  if (done_callback) {
-    done_callback(data);
-  }
-
+  callback_data = data;
+  callback_pending = true;
   stop_pending = true;
 }
 
@@ -197,6 +197,7 @@ void provisioning_start(provisioning_done_cb_t callback) {
 
   done_callback = callback;
   stop_pending = false;
+  callback_pending = false;
 
   WiFi.mode(WIFI_AP);
   String ssid = build_ap_ssid();
@@ -243,6 +244,10 @@ void provisioning_loop() {
 
   if (stop_pending) {
     provisioning_stop();
+    if (callback_pending && done_callback) {
+      callback_pending = false;
+      done_callback(callback_data);
+    }
   }
 }
 

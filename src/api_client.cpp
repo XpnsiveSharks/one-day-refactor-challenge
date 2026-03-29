@@ -10,11 +10,131 @@ constexpr size_t kUrlSize = 320;
 constexpr size_t kBodySize = 256;
 constexpr int kMaxRetries = 3;
 constexpr int kRetryDelayMs = 2000;
+constexpr uint16_t kHttpsPort = 443;
+constexpr uint32_t kSocketTimeoutSeconds = 15;
+constexpr const char* kRailwayHost = "web-production-1770.up.railway.app";
+const IPAddress kRailwayFallbackIp(66, 33, 22, 1);
 
 char g_base_url[kBaseUrlSize] = {0};
 
 bool is_https() {
   return strncmp(g_base_url, "https://", 8) == 0;
+}
+
+bool should_use_railway_ip_fallback() {
+  return strstr(g_base_url, kRailwayHost) != nullptr;
+}
+
+bool is_six_digit_token(const char* token) {
+  if (!token) {
+    return false;
+  }
+
+  for (size_t i = 0; i < 6; ++i) {
+    if (token[i] < '0' || token[i] > '9') {
+      return false;
+    }
+  }
+  return token[6] == '\0';
+}
+
+int post_json_via_railway_ip_fallback(
+    const char* endpoint_path,
+    const char* body,
+    String* response_out
+) {
+  WiFiClientSecure secure_client;
+  secure_client.setInsecure();
+  secure_client.setHandshakeTimeout(kSocketTimeoutSeconds);
+  secure_client.setTimeout(kSocketTimeoutSeconds);
+
+  if (!secure_client.connect(kRailwayFallbackIp, kHttpsPort, kRailwayHost, nullptr, nullptr, nullptr)) {
+    Serial.println("IP fallback TLS connect failed");
+    return -1;
+  }
+
+  String request;
+  request.reserve(strlen(body) + 256);
+  request += "POST ";
+  request += endpoint_path;
+  request += " HTTP/1.1\r\n";
+  request += "Host: ";
+  request += kRailwayHost;
+  request += "\r\n";
+  request += "User-Agent: smartvault-esp32/1.0\r\n";
+  request += "Connection: close\r\n";
+  request += "Content-Type: application/json\r\n";
+  request += "Content-Length: ";
+  request += String(strlen(body));
+  request += "\r\n\r\n";
+  request += body;
+
+  if (secure_client.print(request) == 0) {
+    Serial.println("IP fallback request send failed");
+    secure_client.stop();
+    return -1;
+  }
+
+  String status_line = secure_client.readStringUntil('\n');
+  status_line.trim();
+  int first_space = status_line.indexOf(' ');
+  if (first_space < 0 || status_line.length() < static_cast<unsigned int>(first_space + 4)) {
+    Serial.println("IP fallback invalid HTTP response");
+    secure_client.stop();
+    return -1;
+  }
+
+  int status = status_line.substring(first_space + 1, first_space + 4).toInt();
+
+  while (secure_client.connected()) {
+    String header_line = secure_client.readStringUntil('\n');
+    if (header_line == "\r" || header_line.length() == 0) {
+      break;
+    }
+  }
+
+  if (response_out) {
+    *response_out = secure_client.readString();
+  }
+  secure_client.stop();
+  return status;
+}
+
+int api_client_post_json(const char* endpoint_path, const char* body, String* response_out) {
+  char url[kUrlSize];
+  snprintf(url, sizeof(url), "%s%s", g_base_url, endpoint_path);
+
+  WiFiClientSecure secure_client;
+  WiFiClient plain_client;
+  HTTPClient http;
+
+  if (is_https()) {
+    secure_client.setInsecure();
+    secure_client.setHandshakeTimeout(kSocketTimeoutSeconds);
+    secure_client.setTimeout(kSocketTimeoutSeconds);
+    http.begin(secure_client, url);
+  } else {
+    http.begin(plain_client, url);
+  }
+
+  http.addHeader("Content-Type", "application/json");
+  int status = http.POST(reinterpret_cast<uint8_t*>(const_cast<char*>(body)), strlen(body));
+  if (status > 0 && response_out) {
+    *response_out = http.getString();
+  }
+  http.end();
+
+  if (status > 0 || !is_https() || !should_use_railway_ip_fallback()) {
+    return status;
+  }
+
+  Serial.println("Primary HTTPS request failed, trying IP fallback");
+  int fallback_status = post_json_via_railway_ip_fallback(endpoint_path, body, response_out);
+  if (fallback_status > 0) {
+    Serial.print("IP fallback status: ");
+    Serial.println(fallback_status);
+  }
+  return fallback_status;
 }
 }  // namespace
 
@@ -41,9 +161,10 @@ bool api_client_register_device(
     Serial.println("Missing hardware UUID or token");
     return false;
   }
-
-  char url[kUrlSize];
-  snprintf(url, sizeof(url), "%s/api/v1/devices/register", g_base_url);
+  if (!is_six_digit_token(token)) {
+    Serial.println("Invalid provisioning token format");
+    return false;
+  }
 
   char body[kBodySize];
   snprintf(body, sizeof(body),
@@ -51,27 +172,14 @@ bool api_client_register_device(
            hardware_uuid, token);
 
   for (int attempt = 1; attempt <= kMaxRetries; ++attempt) {
-    WiFiClientSecure secure_client;
-    WiFiClient plain_client;
-    HTTPClient http;
-
-    if (is_https()) {
-      secure_client.setInsecure();
-      http.begin(secure_client, url);
-    } else {
-      http.begin(plain_client, url);
-    }
-    http.addHeader("Content-Type", "application/json");
-    int status = http.POST(reinterpret_cast<uint8_t*>(body), strlen(body));
+    String response;
+    int status = api_client_post_json("/api/v1/devices/register", body, &response);
     Serial.print("Register attempt ");
     Serial.print(attempt);
     Serial.print(" status: ");
     Serial.println(status);
 
     if (status == 200) {
-      String response = http.getString();
-      http.end();
-
       Serial.print("Registration response: ");
       Serial.println(response);
 
@@ -90,7 +198,6 @@ bool api_client_register_device(
     if (status == 409) {
       Serial.println("Device already registered (409)");
       Serial.println("Attempting backend deprovision");
-      http.end();
 
       bool deprovisioned = api_client_deprovision_device(hardware_uuid);
       if (deprovisioned) {
@@ -101,8 +208,6 @@ bool api_client_register_device(
       Serial.println("Deprovision failed, cannot register");
       return false;
     }
-
-    http.end();
 
     if (status == 401) {
       Serial.println("Invalid provisioning token (401)");
@@ -127,27 +232,12 @@ bool api_client_send_tamper_alert(const char* hardware_uuid) {
     return false;
   }
 
-  char url[kUrlSize];
-  snprintf(url, sizeof(url), "%s/api/v1/devices/tamper", g_base_url);
-
   char body[kBodySize];
   snprintf(body, sizeof(body), "{\"hardware_uuid\":\"%s\"}", hardware_uuid);
 
-  WiFiClientSecure secure_client;
-  WiFiClient plain_client;
-  HTTPClient http;
-
-  if (is_https()) {
-    secure_client.setInsecure();
-    http.begin(secure_client, url);
-  } else {
-    http.begin(plain_client, url);
-  }
-  http.addHeader("Content-Type", "application/json");
-  int status = http.POST(reinterpret_cast<uint8_t*>(body), strlen(body));
+  int status = api_client_post_json("/api/v1/devices/tamper", body, nullptr);
   Serial.print("Tamper alert status: ");
   Serial.println(status);
-  http.end();
 
   return status == 200;
 }
@@ -162,32 +252,17 @@ bool api_client_deprovision_device(const char* hardware_uuid) {
     return false;
   }
 
-  char url[kUrlSize];
-  snprintf(url, sizeof(url), "%s/api/v1/devices/deprovision", g_base_url);
-
   char body[kBodySize];
   snprintf(body, sizeof(body), "{\"hardware_uuid\":\"%s\"}", hardware_uuid);
 
   Serial.println("Attempting backend deprovision");
 
   for (int attempt = 1; attempt <= kMaxRetries; ++attempt) {
-    WiFiClientSecure secure_client;
-    WiFiClient plain_client;
-    HTTPClient http;
-
-    if (is_https()) {
-      secure_client.setInsecure();
-      http.begin(secure_client, url);
-    } else {
-      http.begin(plain_client, url);
-    }
-    http.addHeader("Content-Type", "application/json");
-    int status = http.POST(reinterpret_cast<uint8_t*>(body), strlen(body));
+    int status = api_client_post_json("/api/v1/devices/deprovision", body, nullptr);
     Serial.print("Deprovision attempt ");
     Serial.print(attempt);
     Serial.print(" status: ");
     Serial.println(status);
-    http.end();
 
     if (status == 200) {
       Serial.println("Deprovisioned device");
